@@ -526,8 +526,17 @@ def _bc1_compress_level(rgb):
     c0 = to565(cmax); c1 = to565(cmin)             # c0 >= c1 guaranteed
     e0 = from565(c0); e1 = from565(c1)             # decode what the GPU sees
     palette = np.stack([e0, e1, (2 * e0 + e1) // 3, (e0 + 2 * e1) // 3], axis=2)
-    diff = blocks[:, :, :, None, :] - palette[:, :, None, :, :]
-    idx = (diff * diff).sum(axis=-1).argmin(axis=-1).astype(np.uint32)
+    # Nearest palette entry per pixel, computed one endpoint at a time. A single
+    # broadcast (nby,nbx,16,4,3) would be ~800 MB at 4096 px and OOM when several
+    # groups compress in parallel; this keeps only a couple of (nby,nbx,16)
+    # arrays (~67 MB each at 4096) alive.
+    idx = np.zeros((nby, nbx, 16), dtype=np.uint32)
+    best = ((blocks - palette[:, :, 0:1, :]) ** 2).sum(axis=-1)
+    for k in range(1, 4):
+        d = ((blocks - palette[:, :, k:k + 1, :]) ** 2).sum(axis=-1)
+        take = d < best
+        idx[take] = k
+        best[take] = d[take]
     idx[c0 == c1] = 0                              # solid block -> index 0 only
 
     packed = np.zeros((nby, nbx), dtype=np.uint32)
@@ -913,6 +922,18 @@ def compress_group(stage_path, dds_path, tex_px, on_log):
             subprocess.run([texconv, "-f", "BC1_UNORM", "-m", "0", "-y",
                             "-o", os.path.dirname(dds_path), stage_path],
                            capture_output=True, text=True, timeout=180)
+            # texconv names the output from the input basename and, depending on
+            # the build, may use an uppercase ".DDS". On a case-sensitive
+            # filesystem (Linux/macOS) that would never match dds_path and every
+            # group would look failed -- normalise it to the expected name.
+            if not os.path.isfile(dds_path):
+                base = os.path.splitext(os.path.basename(stage_path))[0]
+                for ext in (".DDS", ".Dds", ".dDS"):
+                    alt = os.path.join(os.path.dirname(dds_path), base + ext)
+                    if os.path.isfile(alt):
+                        try: os.replace(alt, dds_path)
+                        except OSError: pass
+                        break
             # isfile() alone let a texconv crash/timeout that left a partial
             # .dds count as success -- the DSF then referenced a broken
             # texture. Full byte-exact validation is cheap here (one run per
