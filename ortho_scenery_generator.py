@@ -1628,6 +1628,35 @@ class OrthoApp:
                   + ("\n⚠ very heavy — may hurt FPS / DSF build time" if warn else "")),
             fg="#ff9955" if warn else "#88aacc")
 
+    def _update_hd_info(self):
+        """Explain, for the CURRENT zoom + selection latitude, what the HD/SD
+        switch actually buys: effective ground resolution and Apple's native
+        detail limit (~30-50 cm/px), so the trade-off is concrete not abstract."""
+        if not hasattr(self, "_hd_info"):
+            return
+        try:
+            z = int(self._zoom_var.get())
+        except (tk.TclError, ValueError):
+            return
+        lat_c = 51.0
+        if self._sel:
+            lat_c = (min(k[0] for k in self._sel) / self._SBASE) + 0.5
+        m_per_tile = 40075016.686 / (2 ** z) * math.cos(math.radians(lat_c))
+        cm = (m_per_tile / (512 if self._hd_var.get() else 256)) * 100.0
+        if self._hd_var.get():
+            # HD asks for finer than Apple's ~30-50 cm/px source -> mostly upscaled
+            note = ("hier meist über Apples echter Detailgrenze → SD spart 75 % "
+                    "Platz bei kaum sichtbarem Verlust" if cm < 30 else
+                    "volle Schärfe der Quelle")
+            self._hd_info.config(
+                text=f"HD ≈ {cm:.0f} cm/px bei Zoom {z}. {note}.", fg="#88aacc")
+        else:
+            note = ("nahe Apples echter Quellauflösung → kaum Verlust gegenüber HD"
+                    if cm <= 55 else "sichtbar weicher; für Nahansicht ggf. HD")
+            self._hd_info.config(
+                text=f"SD ≈ {cm:.0f} cm/px bei Zoom {z}, ¼ Speicher. {note}.",
+                fg="#9fe0ff")
+
     def _cell_deg_u(self):
         """Cell size in base units (integer)."""
         return round(self._cell_deg() * self._SBASE)
@@ -1861,15 +1890,44 @@ class OrthoApp:
 
         # (the old "Generate mipmaps" checkbox was removed: texconv always
         # builds the full mip chain, the switch never did anything)
+        # Image resolution HD/SD switch. True = HD (4096 px group texture),
+        # False = SD (2048 px). BooleanVar so the rest of the code (resume /
+        # auto-sync / estimate / cfg) keeps working unchanged; only the widget
+        # changed from a lone checkbox to an explicit, labelled toggle.
         self._hd_var = tk.BooleanVar(value=True)
-        for var, txt in [(self._hd_var,   "HD tiles (sharper; off = 3.3× less "
-                                          "download & 4× less storage)"),
-                         (self._skip_var, "Skip pure-water tiles "
-                                          "(1-KB-Platzhalter statt Download)")]:
-            tk.Checkbutton(p, text=txt, variable=var, bg=self.C_PANEL, fg=self.C_FG,
-                           selectcolor="#2d3a50", wraplength=225, justify="left",
-                           activebackground=self.C_PANEL, activeforeground=self.C_FG,
-                           font=("Segoe UI", 9)).pack(anchor="w", padx=8, pady=1)
+        tk.Label(p, text="Bild-Auflösung / Resolution:", bg=self.C_PANEL,
+                 fg="#ffcc66", font=("Segoe UI", 9, "bold")).pack(
+                     anchor="w", padx=8, pady=(4, 0))
+        tk.Radiobutton(
+            p, text="HD  –  4096 px  (~11 MB/Gruppe)\n• volle Schärfe",
+            variable=self._hd_var, value=True,
+            bg=self.C_PANEL, fg=self.C_FG, selectcolor="#2d3a50",
+            activebackground=self.C_PANEL, activeforeground=self.C_FG,
+            justify="left", anchor="w", font=("Segoe UI", 9)).pack(
+                fill=tk.X, padx=8, pady=(2, 0))
+        tk.Radiobutton(
+            p, text="SD  –  2048 px  (~2,8 MB/Gruppe, ¼ Speicher)\n"
+                    "• ~½ Zoomstufe weicher; ideal ab Zoom 17–18",
+            variable=self._hd_var, value=False,
+            bg=self.C_PANEL, fg="#9fe0ff", selectcolor="#2d3a50",
+            activebackground=self.C_PANEL, activeforeground="#9fe0ff",
+            justify="left", anchor="w", font=("Segoe UI", 9)).pack(
+                fill=tk.X, padx=8, pady=(0, 2))
+        self._hd_info = tk.Label(p, text="", bg=self.C_PANEL, fg="#88aacc",
+                                 font=("Segoe UI", 8, "italic"),
+                                 wraplength=225, justify="left")
+        self._hd_info.pack(anchor="w", padx=8, pady=(0, 2))
+        # Flipping HD/SD must refresh the live disk/DL estimate and the hint.
+        self._hd_var.trace_add(
+            "write", lambda *_: (self._update_hd_info(), self._update_sel_info()))
+
+        tk.Checkbutton(p, text="Skip pure-water tiles "
+                               "(1-KB-Platzhalter statt Download)",
+                       variable=self._skip_var, bg=self.C_PANEL, fg=self.C_FG,
+                       selectcolor="#2d3a50", wraplength=225, justify="left",
+                       activebackground=self.C_PANEL, activeforeground=self.C_FG,
+                       font=("Segoe UI", 9)).pack(anchor="w", padx=8, pady=1)
+        self._update_hd_info()
 
         self._hdr(p, "Output Folder")
         self._out_var = tk.StringVar(value=os.path.expanduser("~\\Desktop"))
@@ -2908,6 +2966,7 @@ class OrthoApp:
         self._cell_size_var.set(f"Cell: {cd}° × {cd}°")
         if hasattr(self, "_mesh_info"):
             self._update_mesh_info()
+        self._update_hd_info()
 
         if coarse_key is not None:
             la_u, lo_u = coarse_key
