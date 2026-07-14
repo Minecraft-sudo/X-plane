@@ -19,7 +19,7 @@ The GUI opens automatically:
   • Real-time progress bar with ETA
 """
 
-import os, io, re, json, math, shutil, struct, time, threading, subprocess
+import os, io, re, json, math, shutil, struct, time, threading, subprocess, random
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import tkinter as tk
@@ -167,8 +167,20 @@ def download_tiles_parallel(tokens, coords, zoom, *, workers=TILE_WORKERS,
                 return coord, None
             try:
                 r = sess.get(tokens.tile_url(zoom, tx, ty, hd=hd), timeout=15)
-                if r.status_code in (401, 403, 429):
-                    tokens.refresh(); continue
+                if r.status_code == 429:
+                    # Rate-limited. Refreshing the token does NOT lift a rate
+                    # limit, so retrying instantly just deepens the throttle:
+                    # every worker keeps hammering, tiles start failing, and a
+                    # single failed tile makes download_group discard the whole
+                    # 64-tile group and fetch it again. Backing off with jitter
+                    # lets the CDN recover, so sustained throughput stays high
+                    # instead of collapsing into a retry storm.
+                    tokens.refresh()
+                    if attempt < max_ret:
+                        time.sleep(0.5 * attempt + random.random() * 0.5)
+                    continue
+                if r.status_code in (401, 403):
+                    tokens.refresh(); continue    # expired token -> retry at once
                 if r.status_code >= 500:
                     # transient CDN error -- retry (used to give up instantly,
                     # which left permanent gray patches in the texture)
