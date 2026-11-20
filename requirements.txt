@@ -1,0 +1,9 @@
+# Core dependencies for the X-Plane Ortho Scenery Generator.
+requests>=2.25
+pillow>=9.0
+
+# Strongly recommended: enables the fast water/land classifier, the DEM
+# elevation sampler (base-mesh mode) and the built-in BC1 texture compressor
+# used when texconv is not installed. Without numpy, textures fall back to
+# uncompressed DDS (~8x larger) when texconv is absent.
+numpy>=1.21
