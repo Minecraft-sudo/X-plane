@@ -270,12 +270,19 @@ def classify_tile(img, threshold=0.60):
         mask = (b > r + 8) & (g >= r - 5)
         ratio = float(mask.sum()) / mask.size
     else:
-        pixels = list(rgb.getdata())
+        # Sample an 8px grid via the pixel-access object instead of
+        # materialising the whole tile (list(getdata()) built ~262k tuples for
+        # a 512px tile just to read 1/64 of them).
         w, h   = rgb.size
-        samp   = [pixels[yy*w+xx]
-                  for yy in range(0, h, 8) for xx in range(0, w, 8)]
-        ratio  = (sum(1 for (r,g,b) in samp if b > r+8 and g >= r-5)
-                  / len(samp)) if samp else 0.0
+        px     = rgb.load()
+        hit = tot = 0
+        for yy in range(0, h, 8):
+            for xx in range(0, w, 8):
+                r, g, b = px[xx, yy]
+                tot += 1
+                if b > r + 8 and g >= r - 5:
+                    hit += 1
+        ratio = hit / tot if tot else 0.0
     if ratio >= threshold: return "water", ratio
     if ratio >= 0.15:      return "mixed", ratio
     return "land", ratio
