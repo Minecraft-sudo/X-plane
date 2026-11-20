@@ -435,14 +435,8 @@ def write_water_dds(path, rgb):
     r, g, b = rgb
     c565 = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
     block = struct.pack("<HHI", c565, c565, 0)     # c0==c1 -> solid colour
-    DDSD = 0x1 | 0x2 | 0x4 | 0x1000 | 0x20000 | 0x80000   # caps/h/w/pf/mips/linear
     mips = px.bit_length()                          # 32 -> 6 levels
-    header = struct.pack(
-        "<4s7I11I8I5I",
-        b"DDS ", 124, DDSD, px, px, ((px + 3)//4)**2 * 8, 0, mips,
-        *([0]*11),
-        32, 0x4, int.from_bytes(b"DXT1", "little"), 0, 0, 0, 0, 0,
-        0x1000 | 0x8 | 0x400000, 0, 0, 0, 0)
+    header = _dds_header_dxt1(px, px, mips)
     with open(path, "wb") as f:
         f.write(header)
         s = px
@@ -454,19 +448,25 @@ def write_water_dds(path, rgb):
     return dds_is_valid(path, px)
 
 
+def _mip_chain(img):
+    """Full mipmap chain [img, img/2, ... , 1x1] via LANCZOS. Shared by the DDS
+    writers so the level math lives in exactly one place."""
+    levels = [img]
+    cur = img
+    while max(cur.size) > 1:
+        cur = cur.resize((max(1, cur.size[0] // 2), max(1, cur.size[1] // 2)),
+                         Image.LANCZOS)
+        levels.append(cur)
+    return levels
+
+
 def write_dds(img, path, generate_mipmaps=True):
     # NOTE: no vertical flip here (Ortho4XP convention) -- the DSF/.ter UV
     # mapping (t=0 south / t=1 north) already accounts for north-up textures.
     # Flipping here + that UV convention would render everything upside down.
     if img.mode != "RGBA":
         img = img.convert("RGBA")
-    levels = [img]
-    if generate_mipmaps:
-        cur = levels[0]
-        while max(cur.size) > 1:
-            nw = max(1, cur.size[0]//2); nh = max(1, cur.size[1]//2)
-            cur = cur.resize((nw, nh), Image.LANCZOS)
-            levels.append(cur)
+    levels = _mip_chain(img) if generate_mipmaps else [img]
     w0, h0 = levels[0].size
     with open(path, "wb") as f:
         f.write(_dds_header(w0, h0, len(levels)))
@@ -558,12 +558,7 @@ def write_dds_bc1(img, path):
     X-Plane-loadable textures instead of 8x-larger uncompressed ones."""
     if img.mode != "RGB":
         img = img.convert("RGB")
-    levels = [img]
-    cur = img
-    while max(cur.size) > 1:
-        cur = cur.resize((max(1, cur.size[0] // 2), max(1, cur.size[1] // 2)),
-                         Image.LANCZOS)
-        levels.append(cur)
+    levels = _mip_chain(img)
     w0, h0 = levels[0].size
     with open(path, "wb") as f:
         f.write(_dds_header_dxt1(w0, h0, len(levels)))
